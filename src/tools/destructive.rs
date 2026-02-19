@@ -111,6 +111,67 @@ mod tests {
         FilesystemService::new(config)
     }
 
+    #[test]
+    fn destructive_tools_router_contains_all_three() {
+        let router = FilesystemService::destructive_tools_router();
+        let tools = router.list_all();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        assert_eq!(tools.len(), 3);
+        assert!(names.contains(&"delete_file"));
+        assert!(names.contains(&"move_file"));
+        assert!(names.contains(&"delete_directory"));
+    }
+
+    #[test]
+    fn all_destructive_tools_marked_destructive() {
+        let router = FilesystemService::destructive_tools_router();
+        for tool in router.list_all() {
+            let ann = tool.annotations.as_ref().unwrap();
+            assert_eq!(ann.read_only_hint, Some(false));
+            assert_eq!(ann.destructive_hint, Some(true));
+        }
+    }
+
+    #[test]
+    fn destructive_tools_hidden_when_flag_off() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let config = Config {
+            allowed_directories: vec![canon],
+            allow_write: true,
+            allow_destructive: false,
+            max_read_size: 10_485_760,
+            max_depth: 10,
+        };
+        let service = FilesystemService::new(config);
+        let tools = service.tool_router.list_all();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        assert!(!names.contains(&"delete_file"));
+        assert!(!names.contains(&"move_file"));
+        assert!(!names.contains(&"delete_directory"));
+        assert_eq!(tools.len(), 10);
+    }
+
+    #[test]
+    fn destructive_tools_visible_when_flag_on() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let config = Config {
+            allowed_directories: vec![canon],
+            allow_write: true,
+            allow_destructive: true,
+            max_read_size: 10_485_760,
+            max_depth: 10,
+        };
+        let service = FilesystemService::new(config);
+        let tools = service.tool_router.list_all();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        assert!(names.contains(&"delete_file"));
+        assert!(names.contains(&"move_file"));
+        assert!(names.contains(&"delete_directory"));
+        assert_eq!(tools.len(), 13);
+    }
+
     #[tokio::test]
     async fn delete_file_success() {
         let dir = TempDir::new().unwrap();
