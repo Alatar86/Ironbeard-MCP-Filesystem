@@ -36,7 +36,10 @@ impl FilesystemService {
         Parameters(params): Parameters<DeleteFileParams>,
     ) -> Result<String, String> {
         let path = std::path::Path::new(&params.path);
-        let canonical = self.security.validate_file(path).map_err(|e| e.to_string())?;
+        let canonical = self
+            .security
+            .validate_file(path)
+            .map_err(|e| e.to_string())?;
         tokio::fs::remove_file(&canonical)
             .await
             .map_err(|e| io_error_message(e, &params.path))?;
