@@ -71,6 +71,26 @@ impl FilesystemService {
             canonical_dest.display()
         ))
     }
+
+    #[rmcp::tool(
+        name = "delete_directory",
+        description = "Deletes an empty directory. The directory must exist and be empty. Does NOT recursively delete contents.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    async fn delete_directory(
+        &self,
+        Parameters(params): Parameters<DeleteDirectoryParams>,
+    ) -> Result<String, String> {
+        let path = std::path::Path::new(&params.path);
+        let canonical = self
+            .security
+            .validate_directory(path)
+            .map_err(|e| e.to_string())?;
+        tokio::fs::remove_dir(&canonical)
+            .await
+            .map_err(|e| io_error_message(e, &params.path))?;
+        Ok(format!("Deleted directory {}", canonical.display()))
+    }
 }
 
 #[cfg(test)]
@@ -242,5 +262,70 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(src.exists());
+    }
+
+    #[tokio::test]
+    async fn delete_directory_empty_success() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let sub = dir.path().join("empty_dir");
+        std::fs::create_dir(&sub).unwrap();
+        let service = make_service(vec![canon]);
+        let result = service
+            .delete_directory(Parameters(DeleteDirectoryParams {
+                path: sub.to_string_lossy().to_string(),
+            }))
+            .await;
+        assert!(result.unwrap().contains("Deleted directory"));
+        assert!(!sub.exists());
+    }
+
+    #[tokio::test]
+    async fn delete_directory_rejects_nonempty() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let sub = dir.path().join("nonempty");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("file.txt"), "data").unwrap();
+        let service = make_service(vec![canon]);
+        let result = service
+            .delete_directory(Parameters(DeleteDirectoryParams {
+                path: sub.to_string_lossy().to_string(),
+            }))
+            .await;
+        assert!(result.is_err());
+        assert!(sub.exists());
+    }
+
+    #[tokio::test]
+    async fn delete_directory_rejects_file() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let file = dir.path().join("not_a_dir.txt");
+        std::fs::write(&file, "data").unwrap();
+        let service = make_service(vec![canon]);
+        let result = service
+            .delete_directory(Parameters(DeleteDirectoryParams {
+                path: file.to_string_lossy().to_string(),
+            }))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_directory_denied_outside() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let service = make_service(vec![canon]);
+        let other = TempDir::new().unwrap();
+        let outside = other.path().join("secret_dir");
+        std::fs::create_dir(&outside).unwrap();
+        let result = service
+            .delete_directory(Parameters(DeleteDirectoryParams {
+                path: outside.to_string_lossy().to_string(),
+            }))
+            .await;
+        assert!(result.is_err());
+        assert!(outside.exists());
     }
 }
