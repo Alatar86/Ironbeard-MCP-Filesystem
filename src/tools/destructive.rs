@@ -42,6 +42,35 @@ impl FilesystemService {
             .map_err(|e| io_error_message(e, &params.path))?;
         Ok(format!("Deleted file {}", canonical.display()))
     }
+
+    #[rmcp::tool(
+        name = "move_file",
+        description = "Moves or renames a file or directory. Both source and destination must be within allowed directories. The source must exist.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    async fn move_file(
+        &self,
+        Parameters(params): Parameters<MoveFileParams>,
+    ) -> Result<String, String> {
+        let source = std::path::Path::new(&params.source);
+        let destination = std::path::Path::new(&params.destination);
+        let canonical_source = self
+            .security
+            .validate_path_exists(source)
+            .map_err(|e| e.to_string())?;
+        let canonical_dest = self
+            .security
+            .validate_path(destination)
+            .map_err(|e| e.to_string())?;
+        tokio::fs::rename(&canonical_source, &canonical_dest)
+            .await
+            .map_err(|e| io_error_message(e, &params.source))?;
+        Ok(format!(
+            "Moved {} to {}",
+            canonical_source.display(),
+            canonical_dest.display()
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -122,5 +151,96 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(outside.exists());
+    }
+
+    #[tokio::test]
+    async fn move_file_rename_success() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let src = dir.path().join("old.txt");
+        let dst = dir.path().join("new.txt");
+        std::fs::write(&src, "content").unwrap();
+        let service = make_service(vec![canon]);
+        let result = service
+            .move_file(Parameters(MoveFileParams {
+                source: src.to_string_lossy().to_string(),
+                destination: dst.to_string_lossy().to_string(),
+            }))
+            .await;
+        assert!(result.unwrap().contains("Moved"));
+        assert!(!src.exists());
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "content");
+    }
+
+    #[tokio::test]
+    async fn move_file_directory_rename() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let src_dir = dir.path().join("old_dir");
+        std::fs::create_dir(&src_dir).unwrap();
+        std::fs::write(src_dir.join("inner.txt"), "inner").unwrap();
+        let dst_dir = dir.path().join("new_dir");
+        let service = make_service(vec![canon]);
+        let result = service
+            .move_file(Parameters(MoveFileParams {
+                source: src_dir.to_string_lossy().to_string(),
+                destination: dst_dir.to_string_lossy().to_string(),
+            }))
+            .await;
+        assert!(result.is_ok());
+        assert!(!src_dir.exists());
+        assert_eq!(
+            std::fs::read_to_string(dst_dir.join("inner.txt")).unwrap(),
+            "inner"
+        );
+    }
+
+    #[tokio::test]
+    async fn move_file_source_not_found() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let service = make_service(vec![canon]);
+        let result = service
+            .move_file(Parameters(MoveFileParams {
+                source: dir.path().join("nope.txt").to_string_lossy().to_string(),
+                destination: dir.path().join("dest.txt").to_string_lossy().to_string(),
+            }))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn move_file_denied_source_outside() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let service = make_service(vec![canon]);
+        let other = TempDir::new().unwrap();
+        let outside = other.path().join("secret.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        let result = service
+            .move_file(Parameters(MoveFileParams {
+                source: outside.to_string_lossy().to_string(),
+                destination: dir.path().join("stolen.txt").to_string_lossy().to_string(),
+            }))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn move_file_denied_destination_outside() {
+        let dir = TempDir::new().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let src = dir.path().join("file.txt");
+        std::fs::write(&src, "data").unwrap();
+        let service = make_service(vec![canon]);
+        let other = TempDir::new().unwrap();
+        let result = service
+            .move_file(Parameters(MoveFileParams {
+                source: src.to_string_lossy().to_string(),
+                destination: other.path().join("exfil.txt").to_string_lossy().to_string(),
+            }))
+            .await;
+        assert!(result.is_err());
+        assert!(src.exists());
     }
 }
