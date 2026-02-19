@@ -1,11 +1,12 @@
 # ironbeard-mcp-filesystem
 
-A secure filesystem MCP server written in Rust. Provides 10 tools for file operations with strict path sandboxing.
+A secure filesystem MCP server written in Rust. Provides 13 tools for file operations with strict path sandboxing and tiered permission gating.
 
 ## Features
 
 - **7 read-only tools** — always available
-- **3 write tools** — gated behind `--allow-write` flag
+- **3 write tools** — gated behind `--allow-write`
+- **3 destructive tools** — gated behind `--allow-destructive`
 - **Path sandboxing** — only operates within explicitly allowed directories
 - **Symlink escape prevention** — symlinks resolving outside allowed dirs are blocked
 - **Binary file detection** — null-byte scanning in first 8KB
@@ -52,6 +53,21 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 }
 ```
 
+### With Destructive Access
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "/path/to/ironbeard-mcp-filesystem",
+      "args": ["--allow-destructive", "/path/to/project"]
+    }
+  }
+}
+```
+
+> `--allow-destructive` implies `--allow-write`, so you don't need to pass both.
+
 ### CLI Arguments
 
 ```
@@ -80,11 +96,20 @@ ironbeard-mcp-filesystem [OPTIONS] <DIRECTORIES>...
 | `write_file` | Creates or overwrites a file | `path`, `content` |
 | `create_directory` | Creates directory and parents (like `mkdir -p`) | `path` |
 
+### Destructive Tools (require `--allow-destructive`)
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `delete_file` | Deletes a single file (must exist, must be a regular file) | `path` |
+| `move_file` | Moves or renames a file or directory | `source`, `destination` |
+| `delete_directory` | Deletes an empty directory (non-recursive) | `path` |
+
 ## Configuration
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--allow-write` | `false` | Enable write operations (edit, write, create) |
+| `--allow-destructive` | `false` | Enable destructive operations (delete, move). Implies `--allow-write`. |
 | `--max-read-size` | `10485760` (10 MB) | Maximum file size for read operations (bytes) |
 | `--max-depth` | `10` | Maximum directory traversal depth |
 
@@ -96,6 +121,7 @@ All file operations are sandboxed to explicitly allowed directories:
 - **Symlink resolution** — symlinks are resolved to their real target; escapes outside allowed dirs are blocked
 - **Traversal prevention** — `../` path components are neutralized via canonicalization
 - **Write gating** — write tools are only registered when `--allow-write` is passed; they don't appear in tool listings otherwise
+- **Destructive gating** — destructive tools (delete, move) are only registered when `--allow-destructive` is passed; `--allow-destructive` automatically enables `--allow-write`
 - **Binary detection** — `read_file` scans the first 8KB for null bytes and rejects binary files
 - **Size limits** — large files are rejected unless offset/limit narrows the read
 
